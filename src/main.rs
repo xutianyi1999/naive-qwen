@@ -30,8 +30,8 @@ fn launch() -> anyhow::Result<()> {
         .with_key_remap(r"^model\.layers\.([0-9]+)\.self_attn\.q_norm\.(.+)", "layers.$1.attention.q_norm.gamma")
         .with_key_remap(r"^model\.layers\.([0-9]+)\.self_attn\.k_norm\.(.+)", "layers.$1.attention.k_norm.gamma")
 
-        .with_adapter_type(AdapterType::PyTorch) // Specify if adaptation is needed
-        .with_debug_print(); // Enable debug output
+        .with_adapter_type(AdapterType::PyTorch); // Specify if adaptation is needed
+        // .with_debug_print(); // Enable debug output
 
     let record = SafetensorsFileRecorder::<HalfPrecisionSettings>::default()
         .load(args, &device)?;

@@ -37,7 +37,6 @@ struct Mlp<B: Backend> {
     down_proj: Linear<B>,
 }
 
-
 impl<B: Backend> Mlp<B> {
     pub fn new(device: &B::Device, cfg: &Config) -> Self {
         let hidden_sz = cfg.hidden_size;
@@ -55,7 +54,9 @@ impl<B: Backend> Mlp<B> {
         let gate = activation::silu(gate);
 
         let up = self.up_proj.forward(x);
-        self.down_proj.forward(gate.matmul(up))
+        let t = gate * up;
+        let out = self.down_proj.forward(t);
+        out
     }
 }
 
@@ -106,7 +107,6 @@ impl<B: Backend> Attention<B> {
         let shape = x.dims();
         let b_sz = shape[0];
         let q_len = shape[1];
-        let hidden_sz = shape[2];
 
         let q = self.q_proj.forward(x.clone())
             .reshape([b_sz, q_len, self.num_heads, self.head_dim])
@@ -127,14 +127,11 @@ impl<B: Backend> Attention<B> {
         let k = self.rotary_emb.as_ref().unwrap().forward(k);
 
         let scroes = self.attn_scores(q, k);
-        println!("scroes: {}", scroes);
-
         let t = activation::softmax(scroes, 3);
-        println!("t: {}", t);
 
         let o = t.matmul(v)
             .swap_dims(1, 2)
-            .reshape([b_sz, q_len, hidden_sz]);
+            .reshape([b_sz, q_len, self.num_heads * self.head_dim]);
 
         self.o_proj.forward(o)
     }

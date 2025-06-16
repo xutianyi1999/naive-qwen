@@ -51,7 +51,6 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
     std::io::stdout().flush()?;
 
     let mut tokens = tokens.get_ids().to_vec();
-    print!("{:?}", tokens);
     let mut decode_stream = tokenizer.decode_stream(false);
 
     loop {
@@ -71,11 +70,13 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
         assert_eq!(out_tokens.len(), 1);
 
         if let Some(s) = decode_stream.step(out_tokens[0] as u32).unwrap() {
-            print!("{}", s);
-            std::io::stdout().flush()?;
+            // print!("{}", s);
+            // std::io::stdout().flush()?;
         }
 
         tokens.push(out_tokens[0] as u32);
+
+        println!("{:?}", tokens);
     }
 
     Ok(())

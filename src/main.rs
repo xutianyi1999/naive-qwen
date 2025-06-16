@@ -86,7 +86,7 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
         let dims = logits.dims();
 
         let r = logits.slice([0..dims[0], dims[1] - 1..dims[1]]);
-        println!("r");
+        println!("r: {}", r);
         break;
     }
 

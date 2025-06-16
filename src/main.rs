@@ -4,7 +4,7 @@ use burn::backend::cuda::CudaDevice;
 use burn::backend::Cuda;
 use burn::module::Module;
 use burn::prelude::Shape;
-use burn::record::{HalfPrecisionSettings, Recorder};
+use burn::record::{HalfPrecisionSettings, Record, Recorder};
 use burn::tensor::{bf16, Distribution, Tensor, TensorData};
 use burn_import::safetensors::{AdapterType, LoadArgs, SafetensorsFileRecorder};
 use std::path::{Path, PathBuf};
@@ -78,15 +78,21 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
     let tokens = tokenizer.encode_fast("I am", true)
         .map_err(|e| anyhow::anyhow!("Failed to load tokens: {}", e))?;
 
-    loop {
-        let data = TensorData::new(tokens.get_ids().to_vec(), [1, tokens.get_ids().len()]);
-        let tokens = Tensor::from_data(data, &device);
-        println!("tokens: {}", tokens);
-        let logits = qwen3.forward(tokens);
-        let dims = logits.dims();
+    let mut tokens = tokens.get_ids().to_vec();
+    let mut decode_stream = tokenizer.decode_stream(true);
 
-        let r = logits.slice([0..dims[0], dims[1] - 1..dims[1]]);
-        println!("r: {}", r);
+    loop {
+        let data = TensorData::new(tokens.clone(), [1, tokens.len()]);
+
+        let tokens = Tensor::from_data(data, &device);
+        let logits = qwen3.forward(tokens);
+
+        let dims = logits.dims();
+        let logits = logits.slice([0..dims[0], dims[1] - 1..dims[1]]);
+        let last_logits = logits.argmax(2);
+
+        let r = last_logits.into_data();
+        println!("Logits: {:?}", r);
         break;
     }
 

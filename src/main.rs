@@ -51,6 +51,7 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
     std::io::stdout().flush()?;
 
     let mut tokens = tokens.get_ids().to_vec();
+    print!("{:?}", tokens);
     let mut decode_stream = tokenizer.decode_stream(false);
 
     loop {

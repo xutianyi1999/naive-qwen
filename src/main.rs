@@ -5,7 +5,7 @@ use burn::backend::Cuda;
 use burn::module::Module;
 use burn::prelude::Shape;
 use burn::record::{HalfPrecisionSettings, Recorder};
-use burn::tensor::{bf16, Distribution, Tensor};
+use burn::tensor::{bf16, Distribution, Tensor, TensorData};
 use burn_import::safetensors::{AdapterType, LoadArgs, SafetensorsFileRecorder};
 use std::path::{Path, PathBuf};
 
@@ -79,12 +79,15 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to load tokens: {}", e))?;
 
     loop {
-        let tokens = Tensor::from_data([[1]], &device);
+        let data = TensorData::new(tokens.get_ids().to_vec(), [1, tokens.get_ids().len()]);
+        let tokens = Tensor::from_data(data, &device);
+        println!("tokens: {}", tokens);
         let logits = qwen3.forward(tokens);
         let dims = logits.dims();
 
         let r = logits.slice([0..dims[0], dims[1] - 1..dims[1]]);
         println!("r");
+        break;
     }
 
     Ok(())

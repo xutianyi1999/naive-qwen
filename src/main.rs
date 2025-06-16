@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use burn::record::{HalfPrecisionSettings, Recorder};
 use burn_import::safetensors::{AdapterType, LoadArgs, SafetensorsFileRecorder};
 use anyhow::Result;
@@ -11,10 +11,10 @@ use crate::qwen3::{Config, Qwen3};
 
 mod qwen3;
 
-fn launch() -> anyhow::Result<()> {
+fn launch(base_path: &Path) -> anyhow::Result<()> {
     let device = CudaDevice::default();
 
-    let args = LoadArgs::new(PathBuf::from("D:/models/Qwen3-0.6B/model.safetensors"))
+    let args = LoadArgs::new(PathBuf::from(base_path.join("model.safetensors")))
         // Example: Remove "model.encoder." prefix from keys
         .with_key_remap("\\bmodel\\.embed_tokens(\\b|\\.)", "embedding")
         .with_key_remap(r"^model\.norm\.(.+)", "norm.gamma")
@@ -35,17 +35,26 @@ fn launch() -> anyhow::Result<()> {
     let record = SafetensorsFileRecorder::<HalfPrecisionSettings>::default()
         .load(args, &device)?;
 
-    let config: Config = serde_json::from_reader(std::fs::File::open("D:/models/Qwen3-0.6B/config.json")?)
+    let config: Config = serde_json::from_reader(std::fs::File::open(base_path.join("config.json"))?)
         .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
 
     let qwen3 = Qwen3::<Cuda>::new(&config, &device).load_record(record);
 
-    let tokens = Tensor::from_data([[1]], &device);
-    let logtis = qwen3.forward(tokens);
-    println!("{}", logtis);
+    loop {
+        let tokens = Tensor::from_data([[1]], &device);
+        let logtis = qwen3.forward(tokens);
+        println!("{}", logtis);
+    }
+
     Ok(())
 }
 
 fn main() {
-    launch().unwrap();
+    let args = std::env::args();
+    let base_path = args.skip(1)
+        .next()
+        .expect("expect base path argument");
+
+    let base_path = Path::new(&base_path);
+    launch(base_path).unwrap();
 }

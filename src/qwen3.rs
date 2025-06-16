@@ -212,6 +212,7 @@ impl<B: Backend> Qwen3<B> {
 
         let x = self.norm.forward(x);
         let logits = self.lm_head.forward(x);
+
         logits
     }
 }

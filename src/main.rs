@@ -76,7 +76,7 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
 
         tokens.push(out_tokens[0] as u32);
 
-        println!("{:?}", tokens);
+        // println!("{:?}", tokens);
     }
 
     Ok(())

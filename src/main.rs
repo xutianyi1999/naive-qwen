@@ -29,7 +29,6 @@ fn launch() -> anyhow::Result<()> {
         .with_key_remap(r"^model\.layers\.([0-9]+)\.self_attn\.o_proj\.(.+)", "layers.$1.attention.o_proj.$2")
         .with_key_remap(r"^model\.layers\.([0-9]+)\.self_attn\.q_norm\.(.+)", "layers.$1.attention.q_norm.gamma")
         .with_key_remap(r"^model\.layers\.([0-9]+)\.self_attn\.k_norm\.(.+)", "layers.$1.attention.k_norm.gamma")
-
         .with_adapter_type(AdapterType::PyTorch); // Specify if adaptation is needed
         // .with_debug_print(); // Enable debug output
 
@@ -42,7 +41,8 @@ fn launch() -> anyhow::Result<()> {
     let qwen3 = Qwen3::<Cuda>::new(&config, &device).load_record(record);
 
     let tokens = Tensor::from_data([[1]], &device);
-    qwen3.forward(tokens);
+    let logtis = qwen3.forward(tokens);
+    println!("{}", logtis);
     Ok(())
 }
 

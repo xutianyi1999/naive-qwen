@@ -1,5 +1,6 @@
-use burn::module::{Ignored, Module};
-use burn::nn::{Embedding, EmbeddingConfig, Linear, LinearConfig, RmsNorm, RmsNormConfig, RotaryEncoding, RotaryEncodingConfig};
+use std::ops::Deref;
+use burn::module::{Ignored, Module, Param, ParamId};
+use burn::nn::{Embedding, EmbeddingConfig, Linear, LinearConfig, LinearRecord, RmsNorm, RmsNormConfig, RotaryEncoding, RotaryEncodingConfig};
 use burn::prelude::{Backend, Tensor};
 use burn::record::Recorder;
 use burn::tensor::{activation, Int};
@@ -176,6 +177,7 @@ pub struct Qwen3<B: Backend> {
     embedding: Embedding<B>,
     layers: Vec<Layer<B>>,
     norm: RmsNorm<B>,
+    lm_head: Linear<B>
 }
 
 impl<B: Backend> Qwen3<B> {
@@ -194,7 +196,11 @@ impl<B: Backend> Qwen3<B> {
             .with_epsilon(config.rms_norm_eps)
             .init(device);
 
-        Qwen3 { embedding, layers, norm }
+        let lm_head = LinearConfig::new(config.hidden_size, config.vocab_size)
+            .with_bias(false)
+            .init(device);
+
+        Qwen3 { embedding, layers, norm, lm_head }
     }
 
     pub fn forward(&self, x: Tensor<B, 2, Int>) -> Tensor<B, 3> {
@@ -204,6 +210,8 @@ impl<B: Backend> Qwen3<B> {
             x = layer.forward(x);
         }
 
-        self.norm.forward(x)
+        let x = self.norm.forward(x);
+        let logits = self.lm_head.forward(x);
+        logits
     }
 }

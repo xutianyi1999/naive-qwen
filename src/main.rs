@@ -66,12 +66,15 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
         let data = last_logits.into_data();
         assert_eq!(data.dtype, DType::I32);
         let out_tokens: Vec<i32> = data.into_vec().map_err(|e| anyhow::anyhow!("mismatch dtype"))?;
-        assert_eq!(out_tokens.len(), 1);
+        println!();
+        println!("{:?}", out_tokens);
 
-        if let Some(s) = decode_stream.step(out_tokens[0] as u32).unwrap() {
-            print!("{}", s);
-            std::io::stdout().flush()?;
-        }
+        // assert_eq!(out_tokens.len(), 1);
+        //
+        // if let Some(s) = decode_stream.step(out_tokens[0] as u32).unwrap() {
+        //     print!("{}", s);
+        //     std::io::stdout().flush()?;
+        // }
 
         tokens.push(out_tokens[0] as u32);
     }

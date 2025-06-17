@@ -79,22 +79,11 @@ struct Attention<B: Backend> {
 }
 
 pub fn repeat_interleave<B: Backend>(x: Tensor<B, 4>, n_rep: usize) -> Tensor<B, 4> {
-    let dims = x.dims();
-    let mut out = Tensor::<B, 4>::zeros([dims[0], dims[1] * n_rep, dims[2], dims[3]], &x.device());
+    let [a, b, c, d] = x.dims();
 
-    for batch_sz_idx in 0..dims[0] {
-        for head_idx in 0..dims[1] {
-            let start = head_idx * n_rep;
-
-            for c in 0..n_rep {
-                out = out.slice_assign(
-                    [batch_sz_idx..batch_sz_idx + 1, start + c..start + c + 1, 0..dims[2], 0..dims[3]],
-                    x.clone().slice([batch_sz_idx..batch_sz_idx + 1, head_idx..head_idx + 1])
-                );
-            }
-        }
-    }
-    out
+    x.reshape([a, b, 1, c, d])
+        .expand([a, b, n_rep, c, d])
+        .reshape([a, b * n_rep, c, d])
 }
 
 impl<B: Backend> Attention<B> {

@@ -89,8 +89,12 @@ fn main() {
     // let device = CandleDevice::Cpu;
     //
     // let tensor = Tensor::<Candle, 4>::from_data([[[[3.0, 4.9], [2.0, 1.9], [4.0, 5.9]], [[4.0, 5.9], [3.0, 2.9], [5.0, 6.9]]]], &device);
-    // // let repeated = qwen3::repeat_interleave(tensor, 2, &device);
-    // // let repeated = tensor.repeat_dim(1, 2);
+    // let a = qwen3::repeat_interleave(tensor.clone(), 2);
     //
-    // println!("{repeated}");
+    // let tensor = tensor.reshape([1, 2, 1, 3, 2]);
+    // let tensor = tensor.expand([1, 2, 2, 3, 2]);
+    // let b = tensor.reshape([1, 4, 3, 2]);
+    //
+    // let eq = a.equal(b);
+    // println!("eq: {}", eq)
 }

@@ -1,19 +1,17 @@
-use std::io::Write;
 use crate::qwen3::{Config, Qwen3};
-use anyhow::Result;
-use burn::backend::cuda::CudaDevice;
-use burn::backend::Cuda;
+use burn::backend::candle::CandleDevice;
+use burn::backend::Candle;
 use burn::module::Module;
-use burn::prelude::Shape;
 use burn::record::{HalfPrecisionSettings, Record, Recorder};
-use burn::tensor::{bf16, DType, Distribution, Tensor, TensorData};
+use burn::tensor::{DType, Tensor, TensorData};
 use burn_import::safetensors::{AdapterType, LoadArgs, SafetensorsFileRecorder};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 mod qwen3;
 
 fn launch(base_path: &Path) -> anyhow::Result<()> {
-    let device = CudaDevice::default();
+    let device = CandleDevice::Cpu;
 
     let args = LoadArgs::new(PathBuf::from(base_path.join("model.safetensors")))
         // Example: Remove "model.encoder." prefix from keys
@@ -38,20 +36,20 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
         serde_json::from_reader(std::fs::File::open(base_path.join("config.json"))?)
             .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
 
-    let qwen3 = Qwen3::<Cuda>::new(&config, &device).load_record(record);
+    let mut qwen3 = Qwen3::<Candle>::new(&config, &device).load_record(record);
     let tokenizer = tokenizers::Tokenizer::from_file(base_path.join("tokenizer.json"))
         .map_err(|e| anyhow::anyhow!("Failed to load tokens: {}", e))?;
 
-    let prompt = "Hello, my name is";
+    let prompt = "你好";
 
-    let tokens = tokenizer.encode_fast(prompt, false)
+    let tokens = tokenizer.encode_fast(prompt, true)
         .map_err(|e| anyhow::anyhow!("Failed to load tokens: {}", e))?;
 
     print!("{}", prompt);
     std::io::stdout().flush()?;
 
     let mut tokens = tokens.get_ids().to_vec();
-    let mut decode_stream = tokenizer.decode_stream(false);
+    let mut decode_stream = tokenizer.decode_stream(true);
 
     loop {
         let data = TensorData::new(tokens.clone(), [1, tokens.len()]);
@@ -64,8 +62,8 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
         let last_logits = logits.argmax(2);
 
         let data = last_logits.into_data();
-        assert_eq!(data.dtype, DType::I32);
-        let out_tokens: Vec<i32> = data.into_vec().map_err(|e| anyhow::anyhow!("mismatch dtype"))?;
+        assert_eq!(data.dtype, DType::I64);
+        let out_tokens: Vec<i64> = data.into_vec().map_err(|e| anyhow::anyhow!("mismatch dtype"))?;
 
         assert_eq!(out_tokens.len(), 1);
 
@@ -88,4 +86,11 @@ fn main() {
 
     let base_path = Path::new(&base_path);
     launch(base_path).unwrap();
+    // let device = CandleDevice::Cpu;
+    //
+    // let tensor = Tensor::<Candle, 4>::from_data([[[[3.0, 4.9], [2.0, 1.9], [4.0, 5.9]], [[4.0, 5.9], [3.0, 2.9], [5.0, 6.9]]]], &device);
+    // // let repeated = qwen3::repeat_interleave(tensor, 2, &device);
+    // // let repeated = tensor.repeat_dim(1, 2);
+    //
+    // println!("{repeated}");
 }

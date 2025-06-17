@@ -1,10 +1,11 @@
-use std::ops::Deref;
-use burn::module::{Ignored, Module, Param, ParamId};
-use burn::nn::{Embedding, EmbeddingConfig, Linear, LinearConfig, LinearRecord, RmsNorm, RmsNormConfig, RotaryEncoding, RotaryEncodingConfig};
+use burn::module::{Module, Param, ParamId};
+use burn::nn::attention::generate_autoregressive_mask;
+use burn::nn::{Embedding, EmbeddingConfig, Linear, LinearConfig, RmsNorm, RmsNormConfig, RotaryEncoding, RotaryEncodingConfig};
 use burn::prelude::{Backend, Tensor};
 use burn::record::Recorder;
 use burn::tensor::{activation, Int};
 use serde::Deserialize;
+use std::ops::Deref;
 
 #[derive(Deserialize)]
 pub struct Config {
@@ -77,6 +78,25 @@ struct Attention<B: Backend> {
     head_dim: usize,
 }
 
+pub fn repeat_interleave<B: Backend>(x: Tensor<B, 4>, n_rep: usize) -> Tensor<B, 4> {
+    let dims = x.dims();
+    let mut out = Tensor::<B, 4>::zeros([dims[0], dims[1] * n_rep, dims[2], dims[3]], &x.device());
+
+    for batch_sz_idx in 0..dims[0] {
+        for head_idx in 0..dims[1] {
+            let start = head_idx * n_rep;
+
+            for c in 0..n_rep {
+                out = out.slice_assign(
+                    [batch_sz_idx..batch_sz_idx + 1, start + c..start + c + 1, 0..dims[2], 0..dims[3]],
+                    x.clone().slice([batch_sz_idx..batch_sz_idx + 1, head_idx..head_idx + 1])
+                );
+            }
+        }
+    }
+    out
+}
+
 impl<B: Backend> Attention<B> {
     pub fn new(device: &B::Device, cfg: &Config) -> Self {
         let hidden_sz = cfg.hidden_size;
@@ -99,8 +119,7 @@ impl<B: Backend> Attention<B> {
     }
 
     fn attn_scores(&self, query: Tensor<B, 4>, key: Tensor<B, 4>) -> Tensor<B, 4> {
-        query
-            .matmul(key.transpose())
+        query.matmul(key.transpose())
             .div_scalar((self.head_dim as f32).sqrt())
     }
 
@@ -127,9 +146,22 @@ impl<B: Backend> Attention<B> {
         let q = self.rotary_emb.as_ref().unwrap().forward(q);
         let k = self.rotary_emb.as_ref().unwrap().forward(k);
 
-        let scroes = self.attn_scores(q, k);
+        let k = repeat_interleave(k, self.num_heads / self.num_kv_heads);
+        let mut scroes = self.attn_scores(q, k);
+
+        {
+            let mask_attn = generate_autoregressive_mask(b_sz, q_len, &scroes.device());
+            let [batch_size, seq_length_1, seq_length_2] = mask_attn.dims();
+
+            scroes = scroes.mask_fill(
+                mask_attn.reshape([batch_size, 1, seq_length_1, seq_length_2]).repeat_dim(1, self.num_heads),
+                -1.0e4,
+            );
+        }
+
         let t = activation::softmax(scroes, 3);
 
+        let v = repeat_interleave(v, self.num_heads / self.num_kv_heads);
         let o = t.matmul(v)
             .swap_dims(1, 2)
             .reshape([b_sz, q_len, self.num_heads * self.head_dim]);
@@ -177,7 +209,7 @@ pub struct Qwen3<B: Backend> {
     embedding: Embedding<B>,
     layers: Vec<Layer<B>>,
     norm: RmsNorm<B>,
-    lm_head: Linear<B>
+    lm_head: Option<Linear<B>>
 }
 
 impl<B: Backend> Qwen3<B> {
@@ -200,10 +232,20 @@ impl<B: Backend> Qwen3<B> {
             .with_bias(false)
             .init(device);
 
-        Qwen3 { embedding, layers, norm, lm_head }
+        Qwen3 { embedding, layers, norm, lm_head: Some(lm_head) }
     }
 
-    pub fn forward(&self, x: Tensor<B, 2, Int>) -> Tensor<B, 3> {
+    pub fn forward(&mut self, x: Tensor<B, 2, Int>) -> Tensor<B, 3> {
+        if self.lm_head.is_none() {
+            let weight = self.embedding.weight.deref().clone();
+            let weight = weight.transpose();
+
+            self.lm_head = Some(Linear {
+                weight: Param::initialized(ParamId::new(), weight),
+                bias: None,
+            });
+        }
+
         let mut x = self.embedding.forward(x);
 
         for layer in &self.layers {
@@ -211,8 +253,8 @@ impl<B: Backend> Qwen3<B> {
         }
 
         let x = self.norm.forward(x);
-        let logits = self.lm_head.forward(x);
+        let logits = self.lm_head.as_ref().unwrap().forward(x);
 
-        logits
+        activation::softmax(logits, 2)
     }
 }

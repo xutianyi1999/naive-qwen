@@ -40,7 +40,7 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
     let tokenizer = tokenizers::Tokenizer::from_file(base_path.join("tokenizer.json"))
         .map_err(|e| anyhow::anyhow!("Failed to load tokens: {}", e))?;
 
-    let prompt = "你好";
+    let prompt = "我";
 
     let tokens = tokenizer.encode_fast(prompt, true)
         .map_err(|e| anyhow::anyhow!("Failed to load tokens: {}", e))?;

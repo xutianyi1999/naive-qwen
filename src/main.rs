@@ -15,7 +15,7 @@ use burn::backend::candle::CandleDevice;
 mod qwen3;
 
 fn launch(base_path: &Path) -> anyhow::Result<()> {
-    let device = CandleDevice::Cpu;
+    let device = CudaDevice::new(0);
 
     let args = LoadArgs::new(PathBuf::from(base_path.join("model.safetensors")))
         // Example: Remove "model.encoder." prefix from keys
@@ -40,7 +40,7 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
         serde_json::from_reader(std::fs::File::open(base_path.join("config.json"))?)
             .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
 
-    let mut qwen3 = Qwen3::<Candle>::new(&config, &device).load_record(record);
+    let mut qwen3 = Qwen3::<Cuda>::new(&config, &device).load_record(record);
     let tokenizer = tokenizers::Tokenizer::from_file(base_path.join("tokenizer.json"))
         .map_err(|e| anyhow::anyhow!("Failed to load tokens: {}", e))?;
 
@@ -54,15 +54,15 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
 
     let mut tokens = tokens.get_ids()
         .into_iter()
-        .map(|&v| v as i64)
-        .collect::<Vec<i64>>();
+        .map(|&v| v as i32)
+        .collect::<Vec<i32>>();
 
     // let mut tokens = vec![151644,    872,    198,  14990, 151645,    198, 151644,  77091,    198];
     let mut decode_stream = tokenizer.decode_stream(true);
 
     let mut kvcaches = vec![];
     for _ in 0..config.num_hidden_layers {
-        kvcaches.push(KVCache::new(&device, &config));
+        kvcaches.push(KVCache::new());
     }
 
     loop {
@@ -76,8 +76,8 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
         let last_logits = logits.argmax(2);
 
         let data = last_logits.into_data();
-        assert_eq!(data.dtype, DType::I64);
-        let out_tokens: Vec<i64> = data.into_vec().map_err(|e| anyhow::anyhow!("mismatch dtype"))?;
+        assert_eq!(data.dtype, DType::I32);
+        let out_tokens: Vec<i32> = data.into_vec().map_err(|e| anyhow::anyhow!("mismatch dtype"))?;
 
         assert_eq!(out_tokens.len(), 1);
 

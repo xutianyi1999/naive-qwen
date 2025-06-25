@@ -9,25 +9,34 @@ use std::ops::Deref;
 
 pub struct KVCache<B: Backend> {
     // (batch_size, num_heads, seq_len, head_dim)
-    keys: Tensor<B, 4>,
-    values: Tensor<B, 4>,
+    keys: Option<Tensor<B, 4>>,
+    values: Option<Tensor<B, 4>>,
 }
 
 impl <B: Backend> KVCache<B> {
-    pub fn new(device: &Device<B>, cfg: &Config) -> Self {
+    pub fn new() -> Self {
         KVCache {
-            keys: Tensor::empty([1, cfg.num_key_value_heads, 0, cfg.head_dim()], device),
-            values: Tensor::empty([1, cfg.num_key_value_heads, 0, cfg.head_dim()], device),
+            keys: None,
+            values: None,
         }
     }
 
     fn put(&mut self, k: Tensor<B, 4>, v: Tensor<B, 4>) {
-        self.keys = Tensor::cat(vec![self.keys.clone(), k], 2);
-        self.values = Tensor::cat(vec![self.values.clone(), v], 2);
+        match (self.keys.clone(), self.values.clone()) {
+            (None, None) => {
+                self.keys = Some(k);
+                self.values = Some(v);
+            }
+            (Some(keys), Some(values)) => {
+                self.keys = Some(Tensor::cat(vec![keys, k], 2));
+                self.values = Some(Tensor::cat(vec![values, v], 2));
+            }
+            _ => panic!("keys and values must be coercible")
+        }
     }
 
     fn offset(&self) -> usize {
-        self.keys.dims()[2]
+        self.keys.as_ref().map(|keys| keys.dims()[2]).unwrap_or(0)
     }
 }
 
@@ -221,8 +230,8 @@ impl<B: Backend> Attention<B> {
 
         kvcache.put(k, v);
 
-        let k = kvcache.keys.clone();
-        let v = kvcache.values.clone();
+        let k = kvcache.keys.clone().unwrap();
+        let v = kvcache.values.clone().unwrap();
 
         let k = repeat_interleave(k, self.num_heads / self.num_kv_heads);
         let mut scroes = self.attn_scores(q, k);

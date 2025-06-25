@@ -54,8 +54,8 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
 
     let mut tokens = tokens.get_ids()
         .into_iter()
-        .map(|&v| v as i32)
-        .collect::<Vec<i32>>();
+        .map(|&v| v as i64)
+        .collect::<Vec<i64>>();
 
     // let mut tokens = vec![151644,    872,    198,  14990, 151645,    198, 151644,  77091,    198];
     let mut decode_stream = tokenizer.decode_stream(true);
@@ -76,8 +76,8 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
         let last_logits = logits.argmax(2);
 
         let data = last_logits.into_data();
-        assert_eq!(data.dtype, DType::I32);
-        let out_tokens: Vec<i32> = data.into_vec().map_err(|e| anyhow::anyhow!("mismatch dtype"))?;
+        assert_eq!(data.dtype, DType::I64);
+        let out_tokens: Vec<i64> = data.into_vec().map_err(|e| anyhow::anyhow!("mismatch dtype"))?;
 
         assert_eq!(out_tokens.len(), 1);
         println!("{}", out_tokens[0]);

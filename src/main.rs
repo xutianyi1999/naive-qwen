@@ -1,6 +1,5 @@
 use crate::qwen3::{Config, KVCache, Qwen3};
-use burn::backend::cuda::CudaDevice;
-use burn::backend::{Candle, Cuda};
+use burn::backend::{Candle, LibTorch};
 use burn::module::Module;
 use burn::record::{HalfPrecisionSettings, Record, Recorder};
 use burn::tensor::{DType, Tensor, TensorData};
@@ -11,11 +10,12 @@ use endpoints::chat::{ChatCompletionRequestMessage, ChatCompletionUserMessageCon
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use burn::backend::candle::CandleDevice;
+use burn::backend::libtorch::LibTorchDevice;
 
 mod qwen3;
 
 fn launch(base_path: &Path) -> anyhow::Result<()> {
-    let device = CudaDevice::new(0);
+    let device = LibTorchDevice::Cuda(0);
 
     let args = LoadArgs::new(PathBuf::from(base_path.join("model.safetensors")))
         // Example: Remove "model.encoder." prefix from keys
@@ -40,7 +40,7 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
         serde_json::from_reader(std::fs::File::open(base_path.join("config.json"))?)
             .map_err(|e| anyhow::anyhow!("Failed to parse config: {}", e))?;
 
-    let mut qwen3 = Qwen3::<Cuda>::new(&config, &device).load_record(record);
+    let mut qwen3 = Qwen3::<LibTorch>::new(&config, &device).load_record(record);
     let tokenizer = tokenizers::Tokenizer::from_file(base_path.join("tokenizer.json"))
         .map_err(|e| anyhow::anyhow!("Failed to load tokens: {}", e))?;
 
@@ -80,11 +80,11 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
         let out_tokens: Vec<i32> = data.into_vec().map_err(|e| anyhow::anyhow!("mismatch dtype"))?;
 
         assert_eq!(out_tokens.len(), 1);
-
-        if let Some(s) = decode_stream.step(out_tokens[0] as u32).unwrap() {
-            print!("{}", s);
-            std::io::stdout().flush()?;
-        }
+        println!("{}", out_tokens[0]);
+        // if let Some(s) = decode_stream.step(out_tokens[0] as u32).unwrap() {
+        //     print!("{}", s);
+        //     std::io::stdout().flush()?;
+        // }
 
         tokens = out_tokens;
     }

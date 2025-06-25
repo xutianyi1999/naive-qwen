@@ -1,15 +1,16 @@
-use crate::qwen3::{Config, Qwen3};
-use burn::backend::candle::CandleDevice;
-use burn::backend::Candle;
+use crate::qwen3::{Config, KVCache, Qwen3};
+use burn::backend::cuda::CudaDevice;
+use burn::backend::{Candle, Cuda};
 use burn::module::Module;
 use burn::record::{HalfPrecisionSettings, Record, Recorder};
 use burn::tensor::{DType, Tensor, TensorData};
 use burn_import::safetensors::{AdapterType, LoadArgs, SafetensorsFileRecorder};
+use chat_prompts::chat::qwen::Qwen3NoThinkPrompt;
+use chat_prompts::chat::BuildChatPrompt;
+use endpoints::chat::{ChatCompletionRequestMessage, ChatCompletionUserMessageContent};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use chat_prompts::chat::BuildChatPrompt;
-use chat_prompts::chat::qwen::{Qwen2vlPrompt, Qwen3NoThinkPrompt};
-use endpoints::chat::{ChatCompletionRequestMessage, ChatCompletionUserMessageContent};
+use burn::backend::candle::CandleDevice;
 
 mod qwen3;
 
@@ -43,7 +44,7 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
     let tokenizer = tokenizers::Tokenizer::from_file(base_path.join("tokenizer.json"))
         .map_err(|e| anyhow::anyhow!("Failed to load tokens: {}", e))?;
 
-    let prompt = "你是什么模型";
+    let prompt = "什么是比特币";
 
     let mut raw_prompt = Qwen3NoThinkPrompt::default()
         .build(&mut vec![ChatCompletionRequestMessage::new_user_message(ChatCompletionUserMessageContent::Text(prompt.to_string()), None)])?;
@@ -51,15 +52,24 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
     let tokens = tokenizer.encode_fast(raw_prompt, false)
         .map_err(|e| anyhow::anyhow!("Failed to load tokens: {}", e))?;
 
-    let mut tokens = tokens.get_ids().to_vec();
+    let mut tokens = tokens.get_ids()
+        .into_iter()
+        .map(|&v| v as i64)
+        .collect::<Vec<i64>>();
+
     // let mut tokens = vec![151644,    872,    198,  14990, 151645,    198, 151644,  77091,    198];
     let mut decode_stream = tokenizer.decode_stream(true);
+
+    let mut kvcaches = vec![];
+    for _ in 0..config.num_hidden_layers {
+        kvcaches.push(KVCache::new(&device, &config));
+    }
 
     loop {
         let data = TensorData::new(tokens.clone(), [1, tokens.len()]);
         let input = Tensor::from_data(data, &device);
 
-        let logits = qwen3.forward(input);
+        let logits = qwen3.forward(input, &mut kvcaches);
 
         let dims = logits.dims();
         let logits = logits.slice([0..dims[0], dims[1] - 1..dims[1]]);
@@ -71,15 +81,12 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
 
         assert_eq!(out_tokens.len(), 1);
 
-        // println!("out token: {}", out_tokens[0]);
         if let Some(s) = decode_stream.step(out_tokens[0] as u32).unwrap() {
             print!("{}", s);
             std::io::stdout().flush()?;
         }
 
-        tokens.push(out_tokens[0] as u32);
-
-        // println!("{:?}", tokens);
+        tokens = out_tokens;
     }
 
     Ok(())

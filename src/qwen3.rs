@@ -7,6 +7,30 @@ use burn::tensor::{activation, Int, TensorData};
 use serde::Deserialize;
 use std::ops::Deref;
 
+pub struct KVCache<B: Backend> {
+    // (batch_size, num_heads, seq_len, head_dim)
+    keys: Tensor<B, 4>,
+    values: Tensor<B, 4>,
+}
+
+impl <B: Backend> KVCache<B> {
+    pub fn new(device: &Device<B>, cfg: &Config) -> Self {
+        KVCache {
+            keys: Tensor::empty([1, cfg.num_key_value_heads, 0, cfg.head_dim()], device),
+            values: Tensor::empty([1, cfg.num_key_value_heads, 0, cfg.head_dim()], device),
+        }
+    }
+
+    fn put(&mut self, k: Tensor<B, 4>, v: Tensor<B, 4>) {
+        self.keys = Tensor::cat(vec![self.keys.clone(), k], 2);
+        self.values = Tensor::cat(vec![self.values.clone(), v], 2);
+    }
+
+    fn offset(&self) -> usize {
+        self.keys.dims()[2]
+    }
+}
+
 fn rotate_half<B: Backend>(xs: Tensor<B, 4>) -> Tensor<B, 4> {
     let last_dim = xs.dims()[3];
     let xs1 = xs.clone().narrow(3, 0, last_dim / 2);
@@ -58,8 +82,12 @@ impl <B: Backend> RotaryEmbedding<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
-        rope_slow(x, self.cos.clone(), self.sin.clone())
+    fn forward(&self, x: Tensor<B, 4>, offset: usize) -> Tensor<B, 4> {
+        let [_b_sz, _qh, seq_len, _n_embd] = x.dims();
+        let cos = self.cos.clone().narrow(0, offset, seq_len);
+        let sin = self.sin.clone().narrow(0, offset, seq_len);
+
+        rope_slow(x, cos, sin)
     }
 }
 
@@ -143,7 +171,7 @@ pub fn repeat_interleave<B: Backend>(x: Tensor<B, 4>, n_rep: usize) -> Tensor<B,
 }
 
 impl<B: Backend> Attention<B> {
-    pub fn new(device: &B::Device, cfg: &Config) -> Self {
+    pub fn new(device: &B::Device, cfg: &Config, rotary_emb: RotaryEmbedding<B>) -> Self {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -156,7 +184,7 @@ impl<B: Backend> Attention<B> {
             o_proj: LinearConfig::new(num_heads * head_dim, hidden_sz).with_bias(false).init(device),
             q_norm: RmsNormConfig::new(head_dim).with_epsilon(cfg.rms_norm_eps).init(device),
             k_norm: RmsNormConfig::new(head_dim).with_epsilon(cfg.rms_norm_eps).init(device),
-            rotary_emb: Some(RotaryEmbedding::new(cfg.rope_theta, head_dim, cfg.max_position_embeddings, device)),
+            rotary_emb: Some(rotary_emb),
             num_heads,
             num_kv_heads,
             head_dim,
@@ -168,7 +196,7 @@ impl<B: Backend> Attention<B> {
             .div_scalar((self.head_dim as f32).sqrt())
     }
 
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward(&self, x: Tensor<B, 3>, kvcache: &mut KVCache<B>) -> Tensor<B, 3> {
         let shape = x.dims();
         let b_sz = shape[0];
         let q_len = shape[1];
@@ -188,13 +216,18 @@ impl<B: Backend> Attention<B> {
         let q = self.q_norm.forward(q);
         let k = self.k_norm.forward(k);
 
-        let q = self.rotary_emb.as_ref().unwrap().forward(q);
-        let k = self.rotary_emb.as_ref().unwrap().forward(k);
+        let q = self.rotary_emb.as_ref().unwrap().forward(q, kvcache.offset());
+        let k = self.rotary_emb.as_ref().unwrap().forward(k, kvcache.offset());
+
+        kvcache.put(k, v);
+
+        let k = kvcache.keys.clone();
+        let v = kvcache.values.clone();
 
         let k = repeat_interleave(k, self.num_heads / self.num_kv_heads);
         let mut scroes = self.attn_scores(q, k);
 
-        {
+        if q_len > 1 {
             let mask_attn = generate_autoregressive_mask(b_sz, q_len, &scroes.device());
             let [batch_size, seq_length_1, seq_length_2] = mask_attn.dims();
 
@@ -203,7 +236,6 @@ impl<B: Backend> Attention<B> {
                 -1.0e4,
             );
         }
-
         let t = activation::softmax(scroes, 3);
 
         let v = repeat_interleave(v, self.num_heads / self.num_kv_heads);
@@ -224,20 +256,20 @@ struct Layer<B: Backend> {
 }
 
 impl<B: Backend> Layer<B> {
-    pub fn new(device: &B::Device, cfg: &Config) -> Self {
+    pub fn new(device: &B::Device, cfg: &Config, rotary_emb: RotaryEmbedding<B>) -> Self {
         Layer {
-            attention: Attention::new(device, cfg),
+            attention: Attention::new(device, cfg, rotary_emb),
             mlp: Mlp::new(device, cfg),
             input_layernorm: RmsNormConfig::new(cfg.hidden_size).with_epsilon(cfg.rms_norm_eps).init(device),
             post_attention_layernorm: RmsNormConfig::new(cfg.hidden_size).with_epsilon(cfg.rms_norm_eps).init(device),
         }
     }
 
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward(&self, x: Tensor<B, 3>, kvcache: &mut KVCache<B>) -> Tensor<B, 3> {
         let residual = x.clone();
 
         let x = self.input_layernorm.forward(x);
-        let x = self.attention.forward(x);
+        let x = self.attention.forward(x, kvcache);
 
         let x = x + residual;
         let residual = x.clone();
@@ -262,11 +294,15 @@ impl<B: Backend> Qwen3<B> {
         config: &Config,
         device: &B::Device,
     ) -> Self {
+        let head_dim = config.head_dim();
+
         let embedding = EmbeddingConfig::new(config.vocab_size, config.hidden_size)
             .init(device);
 
+        let rotary_emb = RotaryEmbedding::new(config.rope_theta, head_dim, config.max_position_embeddings, device);
+
         let layers = (0..config.num_hidden_layers)
-            .map(|_| Layer::new(device, config))
+            .map(|_| Layer::new(device, config, rotary_emb.clone()))
             .collect();
 
         let norm = RmsNormConfig::new(config.hidden_size)
@@ -280,7 +316,7 @@ impl<B: Backend> Qwen3<B> {
         Qwen3 { embedding, layers, norm, lm_head: Some(lm_head) }
     }
 
-    pub fn forward(&mut self, x: Tensor<B, 2, Int>) -> Tensor<B, 3> {
+    pub fn forward(&mut self, x: Tensor<B, 2, Int>, kvcaches: &mut [KVCache<B>]) -> Tensor<B, 3> {
         if self.lm_head.is_none() {
             let weight = self.embedding.weight.deref().clone();
             let weight = weight.transpose();
@@ -293,8 +329,8 @@ impl<B: Backend> Qwen3<B> {
 
         let mut x = self.embedding.forward(x);
 
-        for layer in &self.layers {
-            x = layer.forward(x);
+        for (i, layer) in self.layers.iter().enumerate() {
+            x = layer.forward(x, &mut kvcaches[i]);
         }
 
         let x = self.norm.forward(x);

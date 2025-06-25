@@ -80,11 +80,11 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
         let out_tokens: Vec<i64> = data.into_vec().map_err(|e| anyhow::anyhow!("mismatch dtype"))?;
 
         assert_eq!(out_tokens.len(), 1);
-        println!("{}", out_tokens[0]);
-        // if let Some(s) = decode_stream.step(out_tokens[0] as u32).unwrap() {
-        //     print!("{}", s);
-        //     std::io::stdout().flush()?;
-        // }
+        // println!("{}", out_tokens[0]);
+        if let Some(s) = decode_stream.step(out_tokens[0] as u32).unwrap() {
+            print!("{}", s);
+            std::io::stdout().flush()?;
+        }
 
         tokens = out_tokens;
     }

@@ -7,6 +7,9 @@ use burn::tensor::{DType, Tensor, TensorData};
 use burn_import::safetensors::{AdapterType, LoadArgs, SafetensorsFileRecorder};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use chat_prompts::chat::BuildChatPrompt;
+use chat_prompts::chat::qwen::{Qwen2vlPrompt, Qwen3NoThinkPrompt};
+use endpoints::chat::{ChatCompletionRequestMessage, ChatCompletionUserMessageContent};
 
 mod qwen3;
 
@@ -40,15 +43,16 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
     let tokenizer = tokenizers::Tokenizer::from_file(base_path.join("tokenizer.json"))
         .map_err(|e| anyhow::anyhow!("Failed to load tokens: {}", e))?;
 
-    let prompt = "我";
+    let prompt = "你是什么模型";
 
-    let tokens = tokenizer.encode_fast(prompt, true)
+    let mut raw_prompt = Qwen3NoThinkPrompt::default()
+        .build(&mut vec![ChatCompletionRequestMessage::new_user_message(ChatCompletionUserMessageContent::Text(prompt.to_string()), None)])?;
+
+    let tokens = tokenizer.encode_fast(raw_prompt, false)
         .map_err(|e| anyhow::anyhow!("Failed to load tokens: {}", e))?;
 
-    print!("{}", prompt);
-    std::io::stdout().flush()?;
-
     let mut tokens = tokens.get_ids().to_vec();
+    // let mut tokens = vec![151644,    872,    198,  14990, 151645,    198, 151644,  77091,    198];
     let mut decode_stream = tokenizer.decode_stream(true);
 
     loop {
@@ -67,6 +71,7 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
 
         assert_eq!(out_tokens.len(), 1);
 
+        // println!("out token: {}", out_tokens[0]);
         if let Some(s) = decode_stream.step(out_tokens[0] as u32).unwrap() {
             print!("{}", s);
             std::io::stdout().flush()?;
@@ -86,15 +91,4 @@ fn main() {
 
     let base_path = Path::new(&base_path);
     launch(base_path).unwrap();
-    // let device = CandleDevice::Cpu;
-    //
-    // let tensor = Tensor::<Candle, 4>::from_data([[[[3.0, 4.9], [2.0, 1.9], [4.0, 5.9]], [[4.0, 5.9], [3.0, 2.9], [5.0, 6.9]]]], &device);
-    // let a = qwen3::repeat_interleave(tensor.clone(), 2);
-    //
-    // let tensor = tensor.reshape([1, 2, 1, 3, 2]);
-    // let tensor = tensor.expand([1, 2, 2, 3, 2]);
-    // let b = tensor.reshape([1, 4, 3, 2]);
-    //
-    // let eq = a.equal(b);
-    // println!("eq: {}", eq)
 }

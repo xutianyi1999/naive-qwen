@@ -1,11 +1,67 @@
 use burn::module::{Module, Param, ParamId};
 use burn::nn::attention::generate_autoregressive_mask;
-use burn::nn::{Embedding, EmbeddingConfig, Linear, LinearConfig, RmsNorm, RmsNormConfig, RotaryEncoding, RotaryEncodingConfig};
-use burn::prelude::{Backend, Tensor};
+use burn::nn::{Embedding, EmbeddingConfig, Linear, LinearConfig, RmsNorm, RmsNormConfig};
+use burn::prelude::{Backend, Device, Tensor};
 use burn::record::Recorder;
-use burn::tensor::{activation, Int};
+use burn::tensor::{activation, Int, TensorData};
 use serde::Deserialize;
 use std::ops::Deref;
+
+fn rotate_half<B: Backend>(xs: Tensor<B, 4>) -> Tensor<B, 4> {
+    let last_dim = xs.dims()[3];
+    let xs1 = xs.clone().narrow(3, 0, last_dim / 2);
+    let xs2 = xs.narrow(3, last_dim / 2, last_dim - last_dim / 2);
+    Tensor::cat(vec![xs2.neg(), xs1], 3)
+}
+
+pub fn rope_slow<B: Backend>(x: Tensor<B, 4>, cos: Tensor<B, 2>, sin: Tensor<B, 2>) -> Tensor<B, 4> {
+    let [_b_sz, _h, seq_len, _n_embd] = x.dims();
+    let cos = Tensor::cat(vec![cos.clone(), cos], 1);
+    let sin = Tensor::cat(vec![sin.clone(), sin], 1);
+    let cos = cos.narrow(0, 0, seq_len);
+    let sin = sin.narrow(0, 0, seq_len);
+    let cos = cos.unsqueeze();
+    let sin = sin.unsqueeze();
+    x.clone().mul(cos) + rotate_half(x).mul(sin)
+}
+
+#[derive(Module, Debug)]
+struct RotaryEmbedding<B: Backend> {
+    cos: Tensor<B, 2>,
+    sin: Tensor<B, 2>
+}
+
+impl <B: Backend> RotaryEmbedding<B> {
+    pub fn new(
+        base: f32,
+        head_dim: usize,
+        max_position_embeddings: usize,
+        device: &Device<B>,
+    ) -> Self {
+        let inv_freq: Vec<_> = (0..head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq= Tensor::from_data(TensorData::new(inv_freq, [1, inv_freq_len]), device);
+        let t: Tensor<B, 2> = Tensor::arange(0i64..max_position_embeddings as i64, device)
+            .float()
+            .reshape([max_position_embeddings, 1]);
+
+        let freqs = t.matmul(inv_freq);
+        let sin = freqs.clone().sin();
+        let cos = freqs.cos();
+
+        Self {
+            sin,
+            cos
+        }
+    }
+
+    fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
+        rope_slow(x, self.cos.clone(), self.sin.clone())
+    }
+}
 
 #[derive(Deserialize)]
 pub struct Config {
@@ -71,7 +127,7 @@ struct Attention<B: Backend> {
     q_norm: RmsNorm<B>,
     k_norm: RmsNorm<B>,
 
-    rotary_emb: Option<RotaryEncoding<B>>,
+    rotary_emb: Option<RotaryEmbedding<B>>,
 
     num_heads: usize,
     num_kv_heads: usize,
@@ -100,7 +156,7 @@ impl<B: Backend> Attention<B> {
             o_proj: LinearConfig::new(num_heads * head_dim, hidden_sz).with_bias(false).init(device),
             q_norm: RmsNormConfig::new(head_dim).with_epsilon(cfg.rms_norm_eps).init(device),
             k_norm: RmsNormConfig::new(head_dim).with_epsilon(cfg.rms_norm_eps).init(device),
-            rotary_emb: Some(RotaryEncodingConfig::new(cfg.max_position_embeddings, head_dim).with_theta(cfg.rope_theta).init(device)),
+            rotary_emb: Some(RotaryEmbedding::new(cfg.rope_theta, head_dim, cfg.max_position_embeddings, device)),
             num_heads,
             num_kv_heads,
             head_dim,

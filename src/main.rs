@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 
 mod qwen3;
 
+const EOG: i64 = 151643;
+
 fn launch(base_path: &Path) -> anyhow::Result<()> {
     let device = CandleDevice::Cpu;
 
@@ -79,6 +81,11 @@ fn launch(base_path: &Path) -> anyhow::Result<()> {
         let out_tokens: Vec<i64> = data.into_vec().map_err(|e| anyhow::anyhow!("mismatch dtype"))?;
 
         assert_eq!(out_tokens.len(), 1);
+
+        if out_tokens[0] == EOG {
+            break;
+        }
+
         // println!("{}", out_tokens[0]);
         if let Some(s) = decode_stream.step(out_tokens[0] as u32).unwrap() {
             print!("{}", s);

@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 
 mod qwen3;
 
-const EOG: i64 = 151643;
+// <|im_end|>
+const EOG: i64 = 151645;
 
 fn launch(base_path: &Path) -> anyhow::Result<()> {
     let device = CandleDevice::Cpu;
